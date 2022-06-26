@@ -5,11 +5,11 @@
 // Package batch supports bundling (batching) of items. Bundling amortizes an
 // action with fixed costs over multiple items. For example, if an API provides
 // an RPC that accepts a list of items as input, but clients would prefer
-// adding items one at a time, then a Bundler can accept individual items from
+// adding items one at a time, then a Batch can accept individual items from
 // the client and bundle many of them into a single RPC.
 //
 // This package is experimental and subject to change without notice.
-package go_batch
+package batch
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const (
 )
 
 var (
-	// ErrOverflow indicates that Bundler's stored bytes exceeds its BufferedByteLimit.
+	// ErrOverflow indicates that Batch's stored bytes exceeds its BufferedByteLimit.
 	ErrOverflow = errors.New("bundler reached buffered byte limit")
 
 	// ErrOversizedItem indicates that an item's size exceeds the maximum bundle size.
@@ -47,13 +47,13 @@ var (
 	errMixedMethods = errors.New("calls to Add and AddWait cannot be mixed")
 )
 
-// A Bundler collects items added to it into a bundle until the bundle
+// A Batch collects items added to it into a bundle until the bundle
 // exceeds a given size, then calls a user-provided function to handle the
 // bundle.
 //
 // The exported fields are only safe to modify prior to the first call to Add
 // or AddWait.
-type Bundler[T interface{}] struct {
+type Batch[T any] struct {
 	// Starting from the time that the first message is added to a bundle, once
 	// this delay has passed, handle the bundle. The default is DefaultDelayThreshold.
 	DelayThreshold time.Duration
@@ -72,7 +72,7 @@ type Bundler[T interface{}] struct {
 	// The maximum size of a bundle, in bytes. Zero means unlimited.
 	BundleByteLimit int
 
-	// The maximum number of bytes that the Bundler will keep in memory before
+	// The maximum number of bytes that the Batch will keep in memory before
 	// returning ErrOverflow. The default is DefaultBufferedByteLimit.
 	BufferedByteLimit int
 
@@ -127,7 +127,7 @@ func (bu *bundle[T]) add(item T, size int) {
 	bu.size += size
 }
 
-// NewBundler creates a new Bundler.
+// New creates a new Batch.
 //
 // itemExample is a value of the type that will be bundled. For example, if you
 // want to create bundles of *Entry, you could pass &Entry{} for itemExample.
@@ -136,10 +136,10 @@ func (bu *bundle[T]) add(item T, size int) {
 // of type T, the argument to handler is of type []T. handler is always called
 // sequentially for each bundle, and never in parallel.
 //
-// Configure the Bundler by setting its thresholds and limits before calling
+// Configure the Batch by setting its thresholds and limits before calling
 // any of its methods.
-func NewBundler[T any](handler func(items []T)) *Bundler[T] {
-	b := &Bundler[T]{
+func New[T any](handler func(items []T)) *Batch[T] {
+	b := &Batch[T]{
 		DelayThreshold:       DefaultDelayThreshold,
 		BundleCountThreshold: DefaultBundleCountThreshold,
 		BundleByteThreshold:  DefaultBundleByteThreshold,
@@ -152,9 +152,9 @@ func NewBundler[T any](handler func(items []T)) *Bundler[T] {
 	return b
 }
 
-func (b *Bundler[T]) initSemaphores() {
+func (b *Batch[T]) initSemaphores() {
 	// Create the semaphores lazily, because the user may set limits
-	// after NewBundler.
+	// after New.
 	b.semOnce.Do(func() {
 		b.sem = semaphore.NewWeighted(int64(b.BufferedByteLimit))
 	})
@@ -163,7 +163,7 @@ func (b *Bundler[T]) initSemaphores() {
 // enqueueCurBundle moves curBundle to the end of the queue. The bundle may be
 // handled immediately if we are below HandlerLimit. It requires that b.mu is
 // locked.
-func (b *Bundler[T]) enqueueCurBundle() {
+func (b *Batch[T]) enqueueCurBundle() {
 	// We don't require callers to check if there is a pending bundle. It
 	// may have already been appended to the queue. If so, return early.
 	if b.curBundle == nil {
@@ -190,9 +190,9 @@ func (b *Bundler[T]) enqueueCurBundle() {
 	}
 }
 
-// setMode sets the state of Bundler's mode. If mode was defined before
+// setMode sets the state of Batch's mode. If mode was defined before
 // and passed state is different from it then return an error.
-func (b *Bundler[T]) setMode(m mode) error {
+func (b *Batch[T]) setMode(m mode) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.mode == m || b.mode == none {
@@ -203,26 +203,26 @@ func (b *Bundler[T]) setMode(m mode) error {
 }
 
 // canFit returns true if bu can fit an additional item of size bytes based
-// on the limits of Bundler b.
-func (b *Bundler[T]) canFit(bu *bundle[T], size int) bool {
+// on the limits of Batch b.
+func (b *Batch[T]) canFit(bu *bundle[T], size int) bool {
 	return (b.BundleByteLimit <= 0 || bu.size+size <= b.BundleByteLimit) &&
 		(b.BundleCountThreshold <= 0 || len(bu.items) < b.BundleCountThreshold)
 }
 
 // Add adds item to the current bundle. It marks the bundle for handling and
 // starts a new one if any of the thresholds or limits are exceeded.
-// The type of item must be assignable to the itemExample parameter of the NewBundler
+// The type of item must be assignable to the itemExample parameter of the New
 // method, otherwise there will be a panic.
 //
-// If the item's size exceeds the maximum bundle size (Bundler.BundleByteLimit), then
+// If the item's size exceeds the maximum bundle size (Batch.BundleByteLimit), then
 // the item can never be handled. Add returns ErrOversizedItem in this case.
 //
 // If adding the item would exceed the maximum memory allowed
-// (Bundler.BufferedByteLimit) or an AddWait call is blocked waiting for
+// (Batch.BufferedByteLimit) or an AddWait call is blocked waiting for
 // memory, Add returns ErrOverflow.
 //
 // Add never blocks.
-func (b *Bundler[T]) Add(item T, size int) error {
+func (b *Batch[T]) Add(item T, size int) error {
 	if err := b.setMode(add); err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func (b *Bundler[T]) Add(item T, size int) error {
 // and nil-ness (see inline comments). It marks curBundle for handling (by
 // appending it to the queue) if any of the thresholds or limits are exceeded.
 // curBundle is lazily initialized. It requires that b.mu is locked.
-func (b *Bundler[T]) add(item T, size int) error {
+func (b *Batch[T]) add(item T, size int) error {
 	// If we don't have a curBundle, see if we can add to the queue tail.
 	if b.tail != nil && b.curBundle == nil && b.canFit(b.tail, size) {
 		b.tail.add(item, size)
@@ -290,7 +290,7 @@ func (b *Bundler[T]) add(item T, size int) error {
 
 // tryHandleBundles is the timer callback that handles or queues any current
 // bundle after DelayThreshold time, even if the bundle isn't completely full.
-func (b *Bundler[T]) tryHandleBundles() {
+func (b *Batch[T]) tryHandleBundles() {
 	b.mu.Lock()
 	b.enqueueCurBundle()
 	b.mu.Unlock()
@@ -298,7 +298,7 @@ func (b *Bundler[T]) tryHandleBundles() {
 
 // next returns the next bundle that is ready for handling and removes it from
 // the internal queue. It requires that b.mu is locked.
-func (b *Bundler[T]) next() *bundle[T] {
+func (b *Batch[T]) next() *bundle[T] {
 	if b.head == nil {
 		return nil
 	}
@@ -316,14 +316,14 @@ func (b *Bundler[T]) next() *bundle[T] {
 // byte total. handle continues processing additional bundles that are ready.
 // If no more bundles are ready, the handler count is decremented and the
 // goroutine ends.
-func (b *Bundler[T]) handle(bu *bundle[T]) {
+func (b *Batch[T]) handle(bu *bundle[T]) {
 	for bu != nil {
 		b.handler(bu.items)
 		bu = b.postHandle(bu)
 	}
 }
 
-func (b *Bundler[T]) postHandle(bu *bundle[T]) *bundle[T] {
+func (b *Batch[T]) postHandle(bu *bundle[T]) *bundle[T] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -340,14 +340,14 @@ func (b *Bundler[T]) postHandle(bu *bundle[T]) *bundle[T] {
 // AddWait adds item to the current bundle. It marks the bundle for handling and
 // starts a new one if any of the thresholds or limits are exceeded.
 //
-// If the item's size exceeds the maximum bundle size (Bundler.BundleByteLimit), then
+// If the item's size exceeds the maximum bundle size (Batch.BundleByteLimit), then
 // the item can never be handled. AddWait returns ErrOversizedItem in this case.
 //
-// If adding the item would exceed the maximum memory allowed (Bundler.BufferedByteLimit),
+// If adding the item would exceed the maximum memory allowed (Batch.BufferedByteLimit),
 // AddWait blocks until space is available or ctx is done.
 //
-// Calls to Add and AddWait should not be mixed on the same Bundler.
-func (b *Bundler[T]) AddWait(ctx context.Context, item T, size int) error {
+// Calls to Add and AddWait should not be mixed on the same Batch.
+func (b *Batch[T]) AddWait(ctx context.Context, item T, size int) error {
 	if err := b.setMode(addWait); err != nil {
 		return err
 	}
@@ -369,9 +369,9 @@ func (b *Bundler[T]) AddWait(ctx context.Context, item T, size int) error {
 	return b.add(item, size)
 }
 
-// Flush invokes the handler for all remaining items in the Bundler and waits
+// Flush invokes the handler for all remaining items in the Batch and waits
 // for it to return.
-func (b *Bundler[T]) Flush() {
+func (b *Batch[T]) Flush() {
 	b.mu.Lock()
 
 	// If a curBundle is pending, move it to the queue.

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package go_batch
+package batch
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 func TestBundlerCount1(t *testing.T) {
 	// Unbundled case: one item per bundle.
 	handler := &testHandler{}
-	b := NewBundler[int](handler.handleImmediate)
+	b := New[int](handler.handleImmediate)
 	b.BundleCountThreshold = 1
 	b.DelayThreshold = time.Second
 
@@ -45,7 +45,7 @@ func TestBundlerCount1(t *testing.T) {
 
 func TestBundlerCount3(t *testing.T) {
 	handler := &testHandler{}
-	b := NewBundler(handler.handleImmediate)
+	b := New(handler.handleImmediate)
 	b.BundleCountThreshold = 3
 	b.DelayThreshold = 100 * time.Millisecond
 	// Add 8 items.
@@ -76,7 +76,7 @@ func TestBundlerCount3(t *testing.T) {
 // flushed.
 func TestBundlerCountSlowHandler(t *testing.T) {
 	handler := &testHandler{}
-	b := NewBundler(handler.handleSlow)
+	b := New(handler.handleSlow)
 	b.BundleCountThreshold = 3
 	b.DelayThreshold = 500 * time.Millisecond
 	// Add 10 items.
@@ -105,7 +105,7 @@ func TestBundlerCountSlowHandler(t *testing.T) {
 
 func TestBundlerByteThreshold(t *testing.T) {
 	handler := &testHandler{}
-	b := NewBundler(handler.handleImmediate)
+	b := New(handler.handleImmediate)
 	b.BundleCountThreshold = 10
 	b.BundleByteThreshold = 3
 	// Increase the limit beyond the number of bundles we expect (3)
@@ -150,7 +150,7 @@ func TestBundlerByteThreshold(t *testing.T) {
 
 func TestBundlerLimit(t *testing.T) {
 	handler := &testHandler{}
-	b := NewBundler(handler.handleImmediate)
+	b := New(handler.handleImmediate)
 	b.BundleCountThreshold = 10
 	b.BundleByteLimit = 3
 	add := func(i int, s int) {
@@ -194,7 +194,7 @@ func TestAddWait(t *testing.T) {
 
 	handlec := make(chan int)
 	done := make(chan struct{})
-	b := NewBundler(func(_ []int) {
+	b := New(func(_ []int) {
 		<-handlec
 		event("handle")
 	})
@@ -226,7 +226,7 @@ func TestAddWait(t *testing.T) {
 }
 
 func TestAddWaitCancel(t *testing.T) {
-	b := NewBundler(func([]int) {})
+	b := New(func([]int) {})
 	b.BufferedByteLimit = 3
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -242,7 +242,7 @@ func TestAddWaitCancel(t *testing.T) {
 func TestBundlerErrors(t *testing.T) {
 	// Use a handler that blocks forever, to force the bundler to run out of
 	// memory.
-	b := NewBundler(func([]int) { select {} })
+	b := New(func([]int) { select {} })
 	b.BundleByteLimit = 3
 	b.BufferedByteLimit = 10
 
@@ -262,7 +262,7 @@ func TestBundlerErrors(t *testing.T) {
 
 func TestModeError(t *testing.T) {
 	// Call Add then AddWait.
-	b := NewBundler(func([]int) {})
+	b := New(func([]int) {})
 	b.BundleByteLimit = 4
 	b.BufferedByteLimit = 4
 	if err := b.Add(0, 2); err != nil {
@@ -271,8 +271,8 @@ func TestModeError(t *testing.T) {
 	if got, want := b.AddWait(context.Background(), 0, 2), errMixedMethods; got != want {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	// Call AddWait then Add on new Bundler.
-	b1 := NewBundler(func([]int) {})
+	// Call AddWait then Add on new Batch.
+	b1 := New(func([]int) {})
 	b1.BundleByteLimit = 4
 	b1.BufferedByteLimit = 4
 	if err := b1.AddWait(context.Background(), 0, 2); err != nil {
@@ -291,7 +291,7 @@ func TestConcurrentHandlersMax(t *testing.T) {
 		active      int
 		maxHandlers int
 	)
-	b := NewBundler(func(s []int) {
+	b := New(func(s []int) {
 		mu.Lock()
 		active++
 		if active > maxHandlers {
@@ -329,7 +329,7 @@ func TestConcurrentFlush(t *testing.T) {
 		mu    sync.Mutex
 		items = make(map[int]bool)
 	)
-	b := NewBundler(func(s []int) {
+	b := New(func(s []int) {
 		mu.Lock()
 		for _, i := range s {
 			items[i] = true
@@ -384,7 +384,7 @@ func TestBundlerTimeBasedFlushDeadlock(t *testing.T) {
 		}
 	}
 
-	b := NewBundler(flush)
+	b := New(flush)
 	b.DelayThreshold = 10 * time.Millisecond
 	b.HandlerLimit = 1
 
@@ -497,7 +497,7 @@ func TestQuantizeTimes(t *testing.T) {
 func BenchmarkBundlerAdd(bench *testing.B) {
 	// Unbundled case: one item per bundle.
 	handler := &testHandler{}
-	b := NewBundler(handler.handleImmediate)
+	b := New(handler.handleImmediate)
 	b.BundleCountThreshold = 1
 	b.DelayThreshold = time.Second
 
@@ -513,7 +513,7 @@ func BenchmarkBundlerAdd(bench *testing.B) {
 func BenchmarkBundlerAddAndFlush(bench *testing.B) {
 	// Unbundled case: one item per bundle.
 	handler := &testHandler{}
-	b := NewBundler(handler.handleImmediate)
+	b := New(handler.handleImmediate)
 	b.BundleCountThreshold = 1
 	b.DelayThreshold = time.Second
 
@@ -530,7 +530,7 @@ func BenchmarkBundlerAddAndFlush(bench *testing.B) {
 func BenchmarkBundlerAddAndFlushSlow1(bench *testing.B) {
 	// Unbundled case: one item per bundle.
 	handler := &testHandler{}
-	b := NewBundler(handler.handleQuick)
+	b := New(handler.handleQuick)
 	b.BundleCountThreshold = 1
 	b.DelayThreshold = time.Second
 
@@ -547,7 +547,7 @@ func BenchmarkBundlerAddAndFlushSlow1(bench *testing.B) {
 func BenchmarkBundlerAddAndFlushSlow25(bench *testing.B) {
 	// More realistic: 25 items per bundle
 	handler := &testHandler{}
-	b := NewBundler(handler.handleQuick)
+	b := New(handler.handleQuick)
 	b.BundleCountThreshold = 25
 	b.DelayThreshold = time.Second
 
